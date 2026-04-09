@@ -1,2 +1,7 @@
 api/node_modules
 *.pem
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.pem
