@@ -1,0 +1,85 @@
+name: FoodExpress-pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout code
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # 2. Setup Terraform
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      # 3. Configure AWS credentials
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      # 4. Build Docker image (from /api folder)
+      - name: Build Docker image
+        working-directory: api
+        run: docker build -t foodexpress-app .
+
+      # 5. Terraform init
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init
+
+      # 6. Terraform apply (create EC2)
+      - name: Terraform Apply
+        working-directory: terraform
+        run: terraform apply -auto-approve
+
+      # 7. Get EC2 public IP
+      - name: Get EC2 Public IP
+        working-directory: terraform
+        run: echo "EC2_PUBLIC_IP=$(terraform output -raw ec2_public_ip)" >> $GITHUB_ENV
+
+      # 8. Save SSH private key
+      - name: Save private key
+        run: |
+          echo "${{ secrets.EC2_SSH_KEY }}" > private_key.pem
+          chmod 600 private_key.pem
+
+      # 9. Wait for EC2 to boot
+      - name: Wait for EC2
+        run: sleep 60
+
+      # 10. Save Docker image to file
+      - name: Save Docker image
+        run: docker save -o foodexpress-app.tar foodexpress-app
+
+      # 11. Copy Docker image to EC2
+      - name: Copy image to EC2
+        run: |
+          scp -o StrictHostKeyChecking=no -i private_key.pem foodexpress-app.tar ubuntu@${EC2_PUBLIC_IP}:/home/ubuntu/
+
+      # 12. Deploy container on EC2
+      - name: Deploy container
+        run: |
+          ssh -o StrictHostKeyChecking=no -i private_key.pem ubuntu@${EC2_PUBLIC_IP} << 'EOF'
+            sudo apt update -y
+            sudo apt install -y docker.io
+            sudo systemctl start docker
+
+            sudo docker stop foodexpress-container || true
+            sudo docker rm foodexpress-container || true
+
+            sudo docker load -i /home/ubuntu/foodexpress-app.tar
+            sudo docker run -d --name foodexpress-container -p 3000:3000 foodexpress-app
+          EOF
+
+      # 13. Test API
+      - name: Test API
+        run: curl http://${EC2_PUBLIC_IP}:3000

@@ -1,1 +1,2 @@
-proj/node_modules
+api/node_modules
+*.pem
